@@ -714,6 +714,12 @@ h_a_freq_dataprep <- function(
   }
   new_denomdf <- alt_df
 
+  # countsource swap: caller decides which df to count from.
+  # altdf_subset is already handled above (alt_df pre-filtered).
+  if (countsource %in% c("altdf", "altdf_subset")) {
+    df <- alt_df
+  }
+
   parentdf <- h_denom_parentdf(.spl_context, denom, denom_by)
   if (denom == "n_parentdf") {
     new_denomdf <- parentdf

@@ -197,8 +197,7 @@ a_freq_combos_j <- function(
     parent_df = new_denomdf,
     id = id,
     denom = denom,
-    .N_col = .N_col,
-    countsource = "df"
+    .N_col = .N_col
   )
 
   .stats_adj <- .stats

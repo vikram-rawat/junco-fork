@@ -1,119 +1,194 @@
 #' @name a_freq_j
 #'
-#' @title Analysis/statistical function for count and percentage in core columns
-#' and (optional) relative risk columns
+#' @title Statistics and analysis functions for frequency counts and percentages
+#'
+#' @description
+#' `s_freq_j()` is the statistics engine: it computes counts, unique counts,
+#' fractions, and denominator statistics from one or more dataframes.
+#' It can be used standalone (e.g., in a custom `cfun`) or called internally
+#' by `a_freq_j()`.
+#'
+#' `a_freq_j()` is the analysis function (`afun`/`cfun`) that wraps `s_freq_j()`
+#' for use inside `rtables` layouts, adding label handling, formatting,
+#' and optional risk difference columns.
 #'
 #' @inheritParams proposal_argument_convention
+#' @param df (`data.frame`)\cr Main analysis dataframe.
+#'   This is the data from which counts are computed.
+#' @param .var (`string`)\cr Column name in `df` to tabulate.
+#' @param .df_row (`data.frame` or NULL)\cr Optional. Row-split dataframe
+#'   (all columns, current row-split level). Used to compute `n_rowdf`
+#'   and to determine observed levels when `drop_levels = TRUE`.
+#'   Required when `denom = "n_rowdf"` or `drop_levels = TRUE`.
 #' @param val (`character` or NULL)\cr
-#' When NULL, all levels of the incoming variable (variable used in the `analyze` call)
-#' will be considered.\cr
-#' When a single `string`, only that current level/value of the incoming variable
-#' will be considered.\cr
-#' When multiple levels, only those levels/values of the incoming variable
-#' will be considered.\cr
-#' When no values are observed (eg zero row input df),
-#' a row with row-label `No data to report` will be included in the table.
-#' @param drop_levels (`logical`)\cr If `TRUE` non-observed levels
-#' (based upon .df_row) will not be included.\cr
-#' Cannot be used together with `val`.
+#'   When NULL, all levels of `.var` are tabulated.\cr
+#'   When a character vector, only those levels are included.\cr
+#'   Cannot be used together with `drop_levels = TRUE`.
+#' @param drop_levels (`logical`)\cr If `TRUE`, non-observed levels
+#'   (based on `.df_row`) are excluded. Requires `.df_row`.\cr
+#'   Cannot be used together with `val`.
 #' @param excl_levels (`character` or NULL)\cr
-#' When NULL, no levels of the incoming variable (variable used in the `analyze` call)
-#' will be excluded.\cr
-#' When multiple levels, those levels/values of the incoming variable
-#' will be excluded.\cr
-#' Cannot be used together with `val`.
-#' @param new_levels (list(2) or NULL)\cr List of length 2.\cr
-#'     First element : names of the new levels\cr
-#'     Second element: list with values of the new levels.\cr
-#' @param new_levels_after (`logical`)\cr If `TRUE` new levels will be added after last level.
-#' @param denom (`string`)\cr See Details.
-#' @param alt_df (`dataframe`)\cr Will be derived based upon alt_df_full and denom_by within a_freq_j.
-#' @param parent_df (`dataframe`)\cr Will be derived within a_freq_j based
-#' upon the input dataframe that goes into build_table (df) and denom_by.\cr
-#' It is a data frame in the higher row-space than the current input df
-#' (which underwent row-splitting by the rtables splitting machinery).
+#'   Levels of `.var` to exclude from tabulation.\cr
+#'   Cannot be used together with `val`.
+#' @param alt_df (`data.frame` or NULL)\cr Optional. Alternative denominator
+#'   dataframe (e.g., ADSL for big-N denominators). Used to compute `n_altdf`.
+#'   Required when `denom = "n_altdf"`.
+#'   When not supplied, `n_altdf` is returned as `NA`.
+#' @param parent_df (`data.frame` or NULL)\cr Optional. Higher row-split
+#'   dataframe (e.g., all SOCs when tabulating within a preferred term).
+#'   Used to compute `n_parentdf`.
+#'   Required when `denom = "n_parentdf"`.
+#'   When not supplied, `n_parentdf` is returned as `NA`.
+#' @param id (`string`)\cr Subject identifier column name. Default `"USUBJID"`.
+#' @param denom (`string`)\cr Controls the denominator for percentages.
+#'   One of:
+#'   \itemize{
+#'     \item `"n_df"` — unique subjects in `df` (default).
+#'     \item `"n_altdf"` — unique subjects in `alt_df`. Requires `alt_df`.
+#'     \item `"N_col"` — column count from rtables. Requires `.N_col`.
+#'     \item `"n_rowdf"` — unique subjects in `.df_row`. Requires `.df_row`.
+#'     \item `"n_parentdf"` — unique subjects in `parent_df`. Requires `parent_df`.
+#'   }
+#' @param .N_col (`integer` or NULL)\cr Optional. Column count from rtables.
+#'   Required when `denom = "N_col"`.
 #'
-#' @param countsource Either `df`, `altdf`, or `altdf_subset`.\cr
-#' When `altdf` the counts will be based upon the alternative dataframe `alt_df`.\cr
-#' When `altdf_subset` the counts will be based upon `alt_df` but first restricted\cr
-#' to the levels/values of the current row split for `.var` (or to `val` when provided).\cr
-#' This is useful for subgroup processing,
-#' to present counts of subjects in a subgroup from the alternative dataframe.
+#' @param new_levels (`list(2)` or NULL)\cr Optional. A list of exactly 2 elements:
+#'   \enumerate{
+#'     \item Character vector of new level names.
+#'     \item List of character vectors — each entry contains the original
+#'           levels that should be combined into the corresponding new level.
+#'   }
+#'   Example: `list(c("AB", "CD"), list(c("A", "B"), c("C", "D")))` creates
+#'   level `"AB"` from rows where `.var` is `"A"` or `"B"`, and `"CD"` from
+#'   `"C"` or `"D"`.
+#' @param new_levels_after (`logical`)\cr If `TRUE` new levels are inserted
+#'   after the last original level they combine. Default `FALSE` (before).
 #'
 #' @details
 #'
-#' `denom` controls the denominator used to calculate proportions/percents.
-#' It must be one of \cr
+#' ## Standalone usage
+#'
+#' `s_freq_j()` can be called directly without `a_freq_j()` or `rtables`.
+#' Only `df` and `.var` are required. All other dataframes (`alt_df`,
+#' `parent_df`, `.df_row`) are optional — when not supplied, the
+#' corresponding n-statistics are returned as `NA`.
+#'
+#' ## Denominator dataframes
+#'
+#' Each optional dataframe serves a single purpose:
 #' \itemize{
-#' \item \strong{N_col} Column count, \cr
-#' \item \strong{n_df} Number of patients (based upon the main input dataframe `df`),\cr
-#' \item \strong{n_altdf} Number of patients from the secondary dataframe (`.alt_df_full`),\cr
-#' Note that argument `denom_by` will perform a row-split on the `.alt_df_full` dataframe.\cr
-#' It is a requirement that variables specified in `denom_by` are part of the row split specifications. \cr
-#' \item \strong{N_colgroup} Number of patients from the column group variable
-#' (note that this is based upon the input .alt_df_full dataframe).\cr
-#' Note that the argument `colgroup` (column variable) needs to be provided,
-#' as it cannot be retrieved directly from the column layout definition.
-#' \item \strong{n_rowdf} Number of patients from the current row-level dataframe
-#' (`.row_df` from the rtables splitting machinery).\cr
-#' \item \strong{n_parentdf} Number of patients from a higher row-level split than the current split.\cr
-#' This higher row-level split is specified in the argument `denom_by`.\cr
+#'   \item `alt_df` — alternative denominator (e.g., ADSL). Provides `n_altdf`.
+#'   \item `.df_row` — row-split dataframe. Provides `n_rowdf` and observed levels.
+#'   \item `parent_df` — higher row-split dataframe. Provides `n_parentdf`.
 #' }
 #'
+#' If a dataframe is not supplied and the corresponding statistic is not
+#' needed for `denom`, it is returned as `NA`. If it IS needed for `denom`,
+#' an informative error is raised.
+#'
 #' @return
-#' * `s_freq_j`: returns a list of following statistics\cr
-#' \itemize{
-#' \item n_df
-#' \item n_rowdf
-#' \item n_parentdf
-#' \item n_altdf
-#' \item denom
-#' \item count
-#' \item count_unique
-#' \item count_unique_fraction
-#' \item count_unique_denom_fraction
-#' }
+#' * `s_freq_j()`: a named list with the following elements:
+#'   \itemize{
+#'     \item `n_df` — unique subjects in `df` (always computed).
+#'     \item `n_altdf` — unique subjects in `alt_df`, or `NA` if not supplied.
+#'     \item `n_rowdf` — unique subjects in `.df_row`, or `NA` if not supplied.
+#'     \item `n_parentdf` — unique subjects in `parent_df`, or `NA` if not supplied.
+#'     \item `denom` — the resolved denominator value.
+#'     \item `count` — named list of event counts per level.
+#'     \item `count_unique` — named list of unique subject counts per level.
+#'     \item `count_unique_fraction` — unique count + proportion (count/denom).
+#'     \item `count_unique_denom_fraction` — unique count + denom + proportion.
+#'   }
+#'
+#' @examples
+#' # ── Standalone s_freq_j usage ───────────────────────────────────────────
+#'
+#' # Minimal call: just df and .var
+#' adae <- data.frame(
+#'   USUBJID = c("S01", "S01", "S02", "S03", "S03", "S03"),
+#'   SEX = factor(c("M", "M", "F", "M", "F", "M"))
+#' )
+#'
+#' s_freq_j(adae, .var = "SEX")
+#'
+#' # With val: count only Males
+#' s_freq_j(adae, .var = "SEX", val = "M")
+#'
+#' # With alt_df denominator (e.g., ADSL for big-N)
+#' adsl <- data.frame(
+#'   USUBJID = c("S01", "S02", "S03", "S04", "S05"),
+#'   SEX = factor(c("M", "F", "M", "F", "M"))
+#' )
+#'
+#' s_freq_j(adae, .var = "SEX", alt_df = adsl, denom = "n_altdf")
 #'
 #' @export
 #' @importFrom stats setNames
 s_freq_j <- function(
   df,
   .var,
-  .df_row,
+  .df_row = NULL,
   val = NULL,
   drop_levels = FALSE,
   excl_levels = NULL,
-  alt_df,
-  parent_df,
+  alt_df = NULL,
+  parent_df = NULL,
   id = "USUBJID",
   denom = c("n_df", "n_altdf", "N_col", "n_rowdf", "n_parentdf"),
-  .N_col,
-  countsource = c("df", "altdf", "altdf_subset")
+  .N_col = NULL
 ) {
-  if (is.na(.var) || is.null(.var)) {
-    stop("Argument .var cannot be NA or NULL.")
+  # --- input validation -------------------------------------------------------
+  checkmate::assert_data_frame(df)
+  checkmate::assert_string(.var)
+  checkmate::assert_string(id)
+  checkmate::assert_true(
+    .var %in% names(df),
+    .var.name = sprintf(".var '%s' must be a column in df", .var)
+  )
+  checkmate::assert_true(
+    id %in% names(df),
+    .var.name = sprintf("id '%s' must be a column in df", id)
+  )
+  checkmate::assert_flag(drop_levels)
+  checkmate::assert_data_frame(.df_row, null.ok = TRUE)
+  checkmate::assert_data_frame(alt_df, null.ok = TRUE)
+  checkmate::assert_data_frame(parent_df, null.ok = TRUE)
+  checkmate::assert_int(.N_col, null.ok = TRUE)
+  checkmate::assert_character(val, null.ok = TRUE)
+  checkmate::assert_character(excl_levels, null.ok = TRUE)
+
+  if (!is.null(val) && drop_levels) {
+    stop("val cannot be used together with drop_levels = TRUE.")
   }
 
-  countsource <- match.arg(countsource)
+  denom <- match.arg(denom)
 
-  if (countsource %in% c("altdf", "altdf_subset")) {
-    df <- alt_df
+  if (denom == "N_col" && is.null(.N_col)) {
+    stop(".N_col is required when denom = 'N_col'.")
+  }
+  if (denom == "n_altdf" && is.null(alt_df)) {
+    stop("alt_df is required when denom = 'n_altdf'.")
+  }
+  if (denom == "n_rowdf" && is.null(.df_row)) {
+    stop(".df_row is required when denom = 'n_rowdf'.")
+  }
+  if (denom == "n_parentdf" && is.null(parent_df)) {
+    stop("parent_df is required when denom = 'n_parentdf'.")
+  }
+  if (drop_levels && is.null(.df_row)) {
+    stop(".df_row is required when drop_levels = TRUE.")
   }
 
   .alt_df <- alt_df
 
-  n1 <- length(unique(.alt_df[[id]]))
+  # --- lazy n-stat computation ------------------------------------------------
+  # each n-stat is NA when its dataframe is not supplied.
+  n1 <- if (!is.null(.alt_df)) length(unique(.alt_df[[id]])) else NA_integer_
   n2 <- length(unique(df[[id]]))
+  n3 <- if (!is.null(.df_row)) length(unique(.df_row[[id]])) else NA_integer_
+  n4 <- if (!is.null(parent_df)) length(unique(parent_df[[id]])) else NA_integer_
 
-  n3 <- length(unique(.df_row[[id]]))
-
-  if (is.null(parent_df)) {
-    parent_df <- df
-  }
-  n4 <- length(unique(parent_df[[id]]))
-
-
-  denom <- match.arg(denom) |> switch(
+  denom <- switch(denom,
     "n_altdf" = n1,
     "n_df" = n2,
     "n_rowdf" = n3,
@@ -133,11 +208,10 @@ s_freq_j <- function(
     obs_levs <- unique(.df_row[[.var]])
     obs_levs <- intersect(levels(.df_row[[.var]]), obs_levs)
 
-    if (!is.null(excl_levels)) obs_levs <- setdiff(obs_levs, excl_levels)
-
-    if (!is.null(val)) {
-      stop("argument val cannot be used together with drop_levels = TRUE.")
+    if (!is.null(excl_levels)) {
+      obs_levs <- setdiff(obs_levs, excl_levels)
     }
+
     val <- obs_levs
   }
 
@@ -285,7 +359,9 @@ s_rel_risk_val_j <- function(
     obs_levs <- unique(.df_row[[.var]])
     obs_levs <- intersect(levels(.df_row[[.var]]), obs_levs)
 
-    if (!is.null(excl_levels)) obs_levs <- setdiff(obs_levs, excl_levels)
+    if (!is.null(excl_levels)) {
+      obs_levs <- setdiff(obs_levs, excl_levels)
+    }
 
     if (!is.null(val)) {
       stop("argument val cannot be used together with drop_levels = TRUE, please specify one or the other.")
@@ -462,6 +538,11 @@ s_rel_risk_val_j <- function(
 #' Required to be specified when `denom = "N_colgroup"`.
 #' @param addstr2levs string, if not NULL will be appended to the rowlabel for that level,
 #' eg to add ",n (percent)" at the end of the rowlabels
+#' @param countsource (`string`)\cr Controls which dataframe is used for counting.
+#'   One of `"df"` (default), `"altdf"`, or `"altdf_subset"`.\cr
+#'   When `"altdf"`, counts are based on `alt_df`.\cr
+#'   When `"altdf_subset"`, counts are based on `alt_df` restricted to
+#'   the current row-split levels.
 #'
 #' @examples
 #' library(dplyr)
@@ -907,8 +988,7 @@ a_freq_j <- function(
       parent_df = new_denomdf,
       id = id,
       denom = denom,
-      .N_col = .N_col,
-      countsource = countsource
+      .N_col = .N_col
     )
     ## remove relrisk stat from .stats
     .stats_adj <- .stats[!(.stats %in% "rr_ci_3d")]
@@ -1046,8 +1126,11 @@ a_freq_j <- function(
 
   ### add extra blankline to the end of inrows --- as long as section_div is not working as expected
   # nolint start
-  if (!is.null(inrows) && extrablankline ||
-    (!is.null(extrablanklineafter) && length(.labels) == 1 && .labels == extrablanklineafter)) {
+  if (
+    !is.null(inrows) &&
+      extrablankline ||
+      (!is.null(extrablanklineafter) && length(.labels) == 1 && .labels == extrablanklineafter)
+  ) {
     inrows <- add_blank_line_rcells(inrows)
   } # nolint end
 
